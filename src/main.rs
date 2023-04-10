@@ -12,13 +12,13 @@ struct Quad {
 }
 
 fn main() -> io::Result<()> {
-
-    let mut connections: HashMap<Quad, tcp::State> = Default::default();
+    let mut connections: HashMap<Quad, tcp::Connection> = Default::default();
 
     let mut nic = tun_tap::Iface::new("tun0", tun_tap::Mode::Tun)?;
     let mut buf = [0u8; 1504];
     loop {
         let nbytes = nic.recv(&mut buf[..])?;
+        let eth_headers = &buf[0..4];
         let _eth_flags = u16::from_be_bytes([buf[0], buf[1]]);
         let eth_proto = u16::from_be_bytes([buf[2], buf[3]]);
 
@@ -35,27 +35,45 @@ fn main() -> io::Result<()> {
 
                 if proto != 0x06 {
                     // Packet not of TCP protocol
-                    continue; 
+                    continue;
                 }
 
                 let ip_header_size = 4 + ip_header.slice().len();
 
                 match etherparse::TcpHeaderSlice::from_slice(&buf[4 + ip_header.slice().len()..]) {
                     Ok(tcp_slice) => {
-
+                        use std::collections::hash_map::Entry;
                         let tcp_ip_header_size = ip_header_size + tcp_slice.slice().len();
 
-                        connections.entry(Quad {
+                        match connections.entry(Quad {
                             src: (src, tcp_slice.source_port()),
                             dst: (dst, tcp_slice.destination_port()),
-                        }).or_default().on_packet(&mut nic, ip_header, tcp_slice, &buf[tcp_ip_header_size..nbytes]);
-
-                    },
+                        }) {
+                            Entry::Occupied(mut c) => {
+                                c.get_mut().on_packet(
+                                    &mut nic,
+                                    ip_header,
+                                    tcp_slice,
+                                    &buf[tcp_ip_header_size..nbytes],
+                                )?;
+                            }
+                            Entry::Vacant(mut e) => {
+                                if let Some(c) = tcp::Connection::accept(
+                                    &mut nic,
+                                    ip_header,
+                                    tcp_slice,
+                                    &buf[tcp_ip_header_size..nbytes],
+                                    eth_headers
+                                )? {
+                                    e.insert(c);
+                                }
+                            }
+                        };
+                    }
                     Err(ignore) => {
                         eprintln!("ip packet cannot be sliced into tcp {:?}", ignore);
                     }
                 }
-
             }
             Err(e) => {
                 eprintln!("ignoring weird packet {:?}", e);
