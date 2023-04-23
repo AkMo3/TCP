@@ -18,7 +18,7 @@ fn main() -> io::Result<()> {
     let mut buf = [0u8; 1504];
     loop {
         let nbytes = nic.recv(&mut buf[..])?;
-        let eth_headers = &buf[0..4];
+        let eth_headers: &[u8; 4] = &buf[0..4].try_into().expect("slice with incorrect length");
         let _eth_flags = u16::from_be_bytes([buf[0], buf[1]]);
         let eth_proto = u16::from_be_bytes([buf[2], buf[3]]);
 
